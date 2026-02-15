@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WiFi Setup</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>WiFi Setup</h1>
+            <p class="subtitle">Connect your device to get started</p>
+        </header>
+
+        <section>
+            <div class="section-header">
+                <span class="section-title">Available Networks</span>
+                <button class="btn btn-secondary" id="rescan-btn">Rescan</button>
+            </div>
+
+            <div class="networks-list" id="networks">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <p>Scanning...</p>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Connection Modal -->
+    <div class="modal-overlay" id="modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="modal-title"></h2>
+                <p id="modal-subtitle"></p>
+            </div>
+
+            <div class="modal-body">
+                <div class="warning" id="warning" style="display: none;">
+                    <strong>Note:</strong> This device cannot bypass captive portals.
+                    If this network requires additional login, connection may fail.
+                </div>
+
+                <form id="connect-form">
+                    <div class="form-group" id="username-group" style="display: none;">
+                        <label for="username">Username</label>
+                        <input type="text" id="username" placeholder="Enter username" autocomplete="off">
+                    </div>
+
+                    <div class="form-group" id="password-group">
+                        <label for="password">Password</label>
+                        <input type="password" id="password" placeholder="Enter password" autocomplete="off">
+                    </div>
+
+                    <div class="status" id="status"></div>
+
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" id="cancel-btn">Cancel</button>
+                        <button type="submit" class="btn btn-primary" id="connect-btn">Connect</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+
+</html>

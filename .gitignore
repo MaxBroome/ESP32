@@ -1,0 +1,10 @@
+.claude
+# Don't shame me, we all do it..
+.vscode
+.pio
+.venv
+.DS_Store
+docs/
+convert_image.py
+*.bin
+assets/fonts/*.h
