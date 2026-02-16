@@ -1,5 +1,6 @@
 // State
 let currentNetwork = null;
+let pollTimer = null;
 
 // DOM elements
 const networksList = document.getElementById('networks');
@@ -16,6 +17,9 @@ const connectForm = document.getElementById('connect-form');
 const connectBtn = document.getElementById('connect-btn');
 const cancelBtn = document.getElementById('cancel-btn');
 const statusEl = document.getElementById('status');
+const mainContainer = document.getElementById('main-container');
+const successScreen = document.getElementById('success-screen');
+const successIp = document.getElementById('success-ip');
 
 function getSignalStrength(rssi) {
     if (rssi > -50) return 4;
@@ -42,12 +46,12 @@ function escapeHtml(text) {
 // Deduplicate SSIDs, keep strongest signal per SSID
 function consolidateNetworks(networks) {
     const map = new Map();
-    networks.forEach(net => {
+    for (const net of networks) {
         const existing = map.get(net.ssid);
         if (!existing || net.rssi > existing.rssi) {
             map.set(net.ssid, net);
         }
-    });
+    }
     return Array.from(map.values()).sort((a, b) => b.rssi - a.rssi);
 }
 
@@ -72,7 +76,7 @@ function renderNetworks(networks) {
                     : !net.open      ? '<span class="badge">Secured</span>'
                     : '';
         return `
-            <div class="network" onclick="openModal('${escaped}', ${net.open}, ${net.enterprise || false})">
+            <div class="network" data-ssid="${escaped}" data-open="${net.open}" data-enterprise="${net.enterprise || false}">
                 <div class="network-info">
                     <div class="network-name">${escaped} ${badge}</div>
                     <div class="network-meta">${net.rssi} dBm · Ch ${net.ch}</div>
@@ -83,8 +87,19 @@ function renderNetworks(networks) {
     }).join('');
 }
 
+// Event delegation for network clicks
+networksList.addEventListener('click', (e) => {
+    const networkEl = e.target.closest('.network');
+    if (!networkEl) return;
+
+    const ssid = networkEl.dataset.ssid;
+    const isOpen = networkEl.dataset.open === 'true';
+    const isEnterprise = networkEl.dataset.enterprise === 'true';
+    openModal(ssid, isOpen, isEnterprise);
+});
+
 // Modal
-window.openModal = function(ssid, isOpen, isEnterprise) {
+function openModal(ssid, isOpen, isEnterprise) {
     currentNetwork = { ssid, isOpen, isEnterprise };
 
     modalTitle.textContent = ssid;
@@ -105,24 +120,84 @@ window.openModal = function(ssid, isOpen, isEnterprise) {
     statusEl.className = 'status';
     statusEl.textContent = '';
 
+    connectBtn.disabled = false;
+    connectBtn.textContent = 'Connect';
+
     modal.classList.add('show');
+    document.body.classList.add('scroll-lock');
 
     if (isEnterprise) {
         setTimeout(() => usernameInput.focus(), 100);
     } else if (!isOpen) {
         setTimeout(() => passwordInput.focus(), 100);
     }
-};
+}
 
 function closeModal() {
     modal.classList.remove('show');
+    document.body.classList.remove('scroll-lock');
     currentNetwork = null;
+    stopPolling();
 }
 
 function showStatus(type, message) {
     statusEl.className = `status show ${type}`;
     statusEl.textContent = message;
 }
+
+function restoreForm() {
+    if (!currentNetwork) return;
+    cancelBtn.style.display = '';
+    if (currentNetwork.isEnterprise) usernameGroup.style.display = 'block';
+    if (!currentNetwork.isOpen) passwordGroup.style.display = 'block';
+    if (currentNetwork.isOpen) warning.style.display = 'block';
+}
+
+function showSuccessScreen(ip) {
+    stopPolling();
+    mainContainer.style.display = 'none';
+    modal.classList.remove('show');
+    document.body.classList.remove('scroll-lock');
+    successIp.textContent = ip;
+    successScreen.classList.add('show');
+}
+
+// -- Status polling ---------------------------------------------------------
+
+function stopPolling() {
+    if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+    }
+}
+
+function startPolling() {
+    stopPolling();
+    pollTimer = setInterval(pollStatus, 1500);
+}
+
+async function pollStatus() {
+    try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+
+        if (data.status === 'connected') {
+            showSuccessScreen(data.ip);
+        } else if (data.status === 'failed') {
+            stopPolling();
+            restoreForm();
+            showStatus('error', data.msg || 'Connection failed.');
+            connectBtn.disabled = false;
+            connectBtn.textContent = 'Connect';
+        }
+        // 'connecting' — keep polling
+    } catch {
+        // Fetch failed (AP might be going down) — stop polling silently
+        stopPolling();
+    }
+}
+
+// -- Network scan -----------------------------------------------------------
 
 async function scanNetworks() {
     networksList.innerHTML = `
@@ -151,13 +226,22 @@ async function scanNetworks() {
     }
 }
 
+// -- Connect ----------------------------------------------------------------
+
 async function handleConnect(e) {
     e.preventDefault();
     if (!currentNetwork) return;
 
     connectBtn.disabled = true;
     connectBtn.textContent = 'Connecting...';
+    cancelBtn.style.display = 'none';
     statusEl.className = 'status';
+
+    // Hide inputs so iOS captive portal webview can't re-focus them.
+    usernameGroup.style.display = 'none';
+    passwordGroup.style.display = 'none';
+    warning.style.display = 'none';
+    document.activeElement.blur();
 
     const payload = {
         ssid: currentNetwork.ssid,
@@ -166,7 +250,7 @@ async function handleConnect(e) {
 
     if (currentNetwork.isEnterprise) {
         payload.user = usernameInput.value;
-        payload.enterprise = "true";
+        payload.enterprise = 'true';
     }
 
     try {
@@ -177,14 +261,20 @@ async function handleConnect(e) {
         });
         const result = await response.json();
 
-        if (result.ok) {
-            showStatus('success', `Connected! IP: ${result.ip}`);
-        } else {
-            showStatus('error', result.msg || 'Connection failed. Check credentials and try again.');
+        if (result.ok === false) {
+            // Immediate validation error (missing SSID, enterprise not supported, etc.)
+            restoreForm();
+            showStatus('error', result.msg || 'Connection failed.');
+            connectBtn.disabled = false;
+            connectBtn.textContent = 'Connect';
+            return;
         }
+
+        // Server accepted the request and started connecting — poll for result.
+        startPolling();
     } catch {
+        restoreForm();
         showStatus('error', 'Request failed. Please try again.');
-    } finally {
         connectBtn.disabled = false;
         connectBtn.textContent = 'Connect';
     }

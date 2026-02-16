@@ -44,6 +44,21 @@ private:
     String saved_user_;
     bool   saved_enterprise_ = false;
 
+    // Pending connection state (non-blocking connect from portal).
+    // serveConnect() kicks off WiFi.begin() and returns immediately.
+    // checkPendingConnection() runs each loop to monitor progress.
+    // serveStatus() lets the JS poll for the result.
+    bool     pending_connect_    = false;
+    String   pending_ssid_;
+    String   pending_pass_;
+    String   pending_user_;
+    bool     pending_enterprise_ = false;
+    uint32_t pending_deadline_   = 0;
+    String   pending_result_;       // "", "connected", "failed"
+    String   pending_ip_;
+    String   pending_error_;
+    uint32_t portal_stop_at_     = 0;
+
     // Set from the ethernet event callback (runs on a different FreeRTOS task)
     static volatile bool eth_link_up_;
     static volatile bool eth_got_ip_;
@@ -53,6 +68,7 @@ private:
                          const String& user, bool enterprise);
 
     // Return empty String on success, or a user-facing error message on failure.
+    // These are blocking — used only during boot with saved credentials.
     String connectWPA(const String& ssid, const String& pass, uint32_t timeout_ms = 15000);
     String connectEnterprise(const String& ssid, const String& user,
                              const String& pass, uint32_t timeout_ms = 20000);
@@ -64,11 +80,14 @@ private:
 
     void startPortal();
     void stopPortal();
+    void hideAP();
+    void checkPendingConnection();
 
     void serveRoot();
     void serveFile(const char* path, const char* mime);
     void serveScan();
     void serveConnect();
+    void serveStatus();
     void serveRedirect();
 
     static String extractJsonValue(const String& json, const char* key);

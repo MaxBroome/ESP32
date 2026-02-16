@@ -3,13 +3,13 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
     <title>WiFi Setup</title>
     <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
-    <div class="container">
+    <div class="container" id="main-container">
         <header>
             <h1>WiFi Setup</h1>
             <p class="subtitle">Connect your device to get started</p>
@@ -28,6 +28,19 @@
                 </div>
             </div>
         </section>
+    </div>
+
+    <!-- Success screen (shown after connecting, before AP tears down) -->
+    <div class="success-screen" id="success-screen">
+        <div class="success-icon">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                <polyline points="22 4 12 14.01 9 11.01"/>
+            </svg>
+        </div>
+        <h1>Connected</h1>
+        <p class="success-ip" id="success-ip"></p>
+        <p class="success-hint">You can close this page.</p>
     </div>
 
     <!-- Connection Modal -->

@@ -1,5 +1,6 @@
 #include "hosted_updater.h"
 #include <LittleFS.h>
+#include <Preferences.h>
 
 // The Arduino ESP32 core exposes these C functions for hosted coprocessor management.
 // They're conditionally compiled when CONFIG_ESP_WIFI_REMOTE_ENABLED is set (which it is
@@ -10,6 +11,8 @@ extern "C" {
 
 static const char* FW_PATH = "/c6_fw.bin";
 static const size_t CHUNK_SIZE = 1400;  // recommended by esp_hosted OTA docs
+static const char* NVS_NS = "c6ota";
+static const char* NVS_KEY = "fwsize";
 
 bool HostedUpdater::updateIfNeeded() {
     if (!hostedIsInitialized()) {
@@ -22,12 +25,34 @@ bool HostedUpdater::updateIfNeeded() {
         return false;
     }
 
-    if (!hostedHasUpdate()) {
+    // Check if the version changed (host driver vs slave firmware).
+    bool versionMismatch = hostedHasUpdate();
+
+    // Also check if the firmware binary on LittleFS changed since last flash.
+    // This catches rebuilds with the same version but different content (e.g.
+    // enabling CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT in a custom C6 build).
+    File fw = LittleFS.open(FW_PATH, "r");
+    size_t fileSize = fw ? fw.size() : 0;
+    if (fw) fw.close();
+
+    Preferences prefs;
+    prefs.begin(NVS_NS, true);  // read-only
+    size_t lastFlashedSize = prefs.getUInt(NVS_KEY, 0);
+    prefs.end();
+
+    bool binaryChanged = (fileSize > 0 && fileSize != lastFlashedSize);
+
+    if (!versionMismatch && !binaryChanged) {
         Serial.println("[C6] Coprocessor firmware is up to date");
         return false;
     }
 
-    // Version mismatch — host is newer than slave
+    if (binaryChanged && !versionMismatch) {
+        Serial.printf("[C6] Firmware binary changed (%u -> %u bytes), forcing update\n",
+                      lastFlashedSize, fileSize);
+    }
+
+    // Version or binary mismatch — update needed
     uint32_t hMaj, hMin, hPat, sMaj, sMin, sPat;
     hostedGetHostVersion(&hMaj, &hMin, &hPat);
     hostedGetSlaveVersion(&sMaj, &sMin, &sPat);
@@ -36,6 +61,12 @@ bool HostedUpdater::updateIfNeeded() {
     Serial.println("[C6] Updating coprocessor firmware...");
 
     if (flashFromFile(FW_PATH)) {
+        // Record the file size so we don't re-flash the same binary next boot.
+        Preferences p;
+        p.begin(NVS_NS, false);
+        p.putUInt(NVS_KEY, fileSize);
+        p.end();
+
         Serial.println("[C6] Update complete, rebooting...");
         delay(500);
         ESP.restart();

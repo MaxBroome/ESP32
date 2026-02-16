@@ -53,6 +53,10 @@ body {
     min-height: 100vh;
 }
 
+body.scroll-lock {
+    overflow: hidden;
+}
+
 .container {
     max-width: 28rem;
     margin: 0 auto;
@@ -86,6 +90,7 @@ h1 {
 .btn {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 0.5rem;
     padding: 0.625rem 1rem;
     font-size: 0.875rem;
@@ -129,8 +134,6 @@ h1 {
     border: 1px solid var(--border);
     border-radius: 0.5rem;
     overflow: hidden;
-    max-height: 400px;
-    overflow-y: auto;
     box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
 }
 
@@ -139,9 +142,11 @@ h1 {
     justify-content: space-between;
     align-items: center;
     padding: 1rem;
+    min-height: 3rem;
     border-bottom: 1px solid var(--border);
     cursor: pointer;
     transition: background 150ms;
+    -webkit-tap-highlight-color: transparent;
 }
 
 .network:last-child {
@@ -149,6 +154,10 @@ h1 {
 }
 
 .network:hover {
+    background: var(--muted);
+}
+
+.network:active {
     background: var(--muted);
 }
 
@@ -255,6 +264,48 @@ h1 {
     color: var(--muted-fg);
 }
 
+/* Success screen */
+.success-screen {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    z-index: 100;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 2rem;
+}
+
+.success-screen.show {
+    display: flex;
+    animation: fadeIn 300ms;
+}
+
+.success-icon {
+    color: var(--success);
+    margin-bottom: 1.5rem;
+}
+
+.success-screen h1 {
+    font-size: 2rem;
+    margin-bottom: 0.75rem;
+}
+
+.success-ip {
+    font-size: 1.5rem;
+    font-weight: 600;
+    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    color: var(--primary);
+    margin-bottom: 1rem;
+}
+
+.success-hint {
+    color: var(--muted-fg);
+    font-size: 0.875rem;
+}
+
 /* Modal */
 .modal-overlay {
     display: none;
@@ -270,7 +321,7 @@ h1 {
 
 .modal-overlay.show {
     display: flex;
-    align-items: center;
+    align-items: flex-end;
     justify-content: center;
     animation: fadeIn 200ms;
 }
@@ -288,24 +339,25 @@ h1 {
 .modal {
     background: var(--card);
     border: 1px solid var(--border);
-    border-radius: 0.5rem;
+    border-radius: 0.75rem 0.75rem 0 0;
     width: 100%;
-    max-width: 24rem;
-    max-height: 90vh;
+    max-width: 28rem;
+    max-height: calc(100vh - 3rem);
     overflow-y: auto;
-    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
-    animation: slideUp 200ms;
+    -webkit-overflow-scrolling: touch;
+    box-shadow: 0 -4px 25px -5px rgba(0, 0, 0, 0.15);
+    animation: sheetUp 250ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-@keyframes slideUp {
+@keyframes sheetUp {
     from {
         opacity: 0;
-        transform: translateY(1rem) scale(0.95);
+        transform: translateY(100%);
     }
 
     to {
         opacity: 1;
-        transform: translateY(0) scale(1);
+        transform: translateY(0);
     }
 }
 
@@ -353,11 +405,12 @@ h1 {
 .form-group input {
     width: 100%;
     padding: 0.625rem 0.75rem;
-    font-size: 0.9375rem;
+    font-size: 16px;
     background: var(--bg);
     border: 1px solid var(--input-border);
     border-radius: 0.375rem;
     color: var(--fg);
+    touch-action: manipulation;
 }
 
 .form-group input:focus {
@@ -392,8 +445,44 @@ h1 {
 
 .modal-footer {
     display: flex;
-    gap: 0.75rem;
-    justify-content: flex-end;
+    flex-direction: column-reverse;
+    gap: 0.5rem;
+}
+
+.modal-footer .btn {
+    width: 100%;
+}
+
+@media (min-width: 480px) {
+    .modal-footer {
+        flex-direction: row;
+        justify-content: flex-end;
+    }
+
+    .modal-footer .btn {
+        width: auto;
+    }
+
+    .modal-overlay.show {
+        align-items: center;
+    }
+
+    .modal {
+        border-radius: 0.5rem;
+        animation: slideUp 200ms;
+    }
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(1rem) scale(0.95);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
 }
 
 @media (max-width: 640px) {

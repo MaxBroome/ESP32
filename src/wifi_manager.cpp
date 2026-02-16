@@ -4,6 +4,7 @@
 #include <LittleFS.h>
 #include <HTTPClient.h>
 #include <esp_eap_client.h>
+#include <esp_wifi.h>
 
 // NVS
 static const char* NVS_NS = "wifi";
@@ -14,8 +15,7 @@ static const IPAddress AP_IP(192, 168, 4, 1);
 static const IPAddress AP_GW(192, 168, 4, 1);
 static const IPAddress AP_MASK(255, 255, 255, 0);
 
-// Google's generate_204 — returns 204 with an empty body. Fast, reliable,
-// and the de facto standard for captive portal / connectivity detection.
+// ScoreScrape API ping — returns 200 with "Pong!" body.
 static const char* CAPTIVE_CHECK_URL  = "https://api.scorescrape.io/ping";
 static const char* CAPTIVE_CHECK_RESPONSE = "Pong!";
 
@@ -57,7 +57,7 @@ void WiFiManager::begin() {
         Serial.printf("[NET] Ethernet online (%s)\n", ETH.localIP().toString().c_str());
         state_     = WiFiState::CONNECTED;
         conn_type_ = ConnType::ETHERNET;
-        WiFi.softAPdisconnect(false);  // shut down the AP side
+        hideAP();
         return;
     }
 
@@ -80,7 +80,7 @@ void WiFiManager::begin() {
         if (err.isEmpty()) {
             state_     = WiFiState::CONNECTED;
             conn_type_ = ConnType::WIFI;
-            WiFi.softAPdisconnect(false);  // shut down the AP side
+            hideAP();
             Serial.printf("[NET] WiFi online (%s)\n", WiFi.localIP().toString().c_str());
             return;
         }
@@ -95,6 +95,15 @@ void WiFiManager::handlePortal() {
     if (server_) server_->handleClient();
     if (dns_)    dns_->processNextRequest();
 
+    checkPendingConnection();
+
+    // Deferred portal teardown — gives the phone time to poll /api/status
+    // and render the success screen before the SoftAP disappears.
+    if (portal_stop_at_ > 0 && millis() >= portal_stop_at_) {
+        portal_stop_at_ = 0;
+        stopPortal();
+    }
+
     // Auto-detect ethernet coming online while portal is up
     static uint32_t next_eth_poll = 0;
     uint32_t now = millis();
@@ -104,7 +113,7 @@ void WiFiManager::handlePortal() {
             Serial.println("[NET] Ethernet detected, closing portal");
             state_     = WiFiState::CONNECTED;
             conn_type_ = ConnType::ETHERNET;
-            stopPortal();  // stopPortal already calls softAPdisconnect
+            stopPortal();
         }
     }
 }
@@ -164,14 +173,14 @@ bool WiFiManager::checkEthernetInternet() {
     http.begin(CAPTIVE_CHECK_URL);
     http.setTimeout(4000);
     int code = http.GET();
-    
+
     if (code == 200) {
         String response = http.getString();
         http.end();
         response.trim();
         return response == CAPTIVE_CHECK_RESPONSE;
     }
-    
+
     http.end();
     return false;
 }
@@ -296,12 +305,12 @@ bool WiFiManager::checkInternet() {
     http.begin(CAPTIVE_CHECK_URL);
     http.setTimeout(5000);
     int code = http.GET();
-    
+
     if (code == 200) {
         String response = http.getString();
         http.end();
         response.trim();
-        
+
         if (response == CAPTIVE_CHECK_RESPONSE) {
             Serial.println("[NET] Internet connectivity verified via ScoreScrape API");
             return true;
@@ -310,7 +319,7 @@ bool WiFiManager::checkInternet() {
             return false;
         }
     }
-    
+
     http.end();
     Serial.printf("[NET] Ping endpoint returned code %d (expected 200)\n", code);
     return false;
@@ -338,6 +347,7 @@ void WiFiManager::startPortal() {
     server_->on("/script.js",   HTTP_GET,  [this]() { serveFile("/script.js", "application/javascript"); });
     server_->on("/api/scan",    HTTP_GET,  [this]() { serveScan(); });
     server_->on("/api/connect", HTTP_POST, [this]() { serveConnect(); });
+    server_->on("/api/status",  HTTP_GET,  [this]() { serveStatus(); });
     server_->onNotFound(                   [this]() { serveRedirect(); });
     server_->begin();
 
@@ -349,9 +359,67 @@ void WiFiManager::startPortal() {
 void WiFiManager::stopPortal() {
     if (server_) { server_->stop(); delete server_; server_ = nullptr; }
     if (dns_)    { dns_->stop();    delete dns_;    dns_    = nullptr; }
-    WiFi.softAPdisconnect(false);
-    // Stay in AP_STA mode — do NOT call WiFi.mode() here.
+    hideAP();
     Serial.println("[NET] Portal stopped");
+}
+
+void WiFiManager::hideAP() {
+    // Silence the SoftAP that the C6 broadcasts in AP_STA mode.
+    // softAPdisconnect(true) zeros the SSID/password via esp_wifi_set_config,
+    // then we belt-and-suspenders set ssid_hidden=1 via the low-level API
+    // to ensure the C6 stops including the SSID in beacon frames.
+    // We stay in AP_STA mode — do NOT call WiFi.mode() here.
+    WiFi.softAPdisconnect(true);
+    delay(100);
+    wifi_config_t conf;
+    if (esp_wifi_get_config(WIFI_IF_AP, &conf) == ESP_OK) {
+        conf.ap.ssid_hidden = 1;
+        conf.ap.max_connection = 0;
+        esp_wifi_set_config(WIFI_IF_AP, &conf);
+    }
+}
+
+
+// -- Pending connection (non-blocking) --------------------------------------
+// serveConnect() kicks off WiFi.begin() and returns immediately so the phone
+// gets an HTTP response right away. checkPendingConnection() runs each loop
+// iteration to monitor WiFi.status() and do the internet check once associated.
+
+void WiFiManager::checkPendingConnection() {
+    if (!pending_connect_) return;
+
+    if (WiFi.status() == WL_CONNECTED) {
+        // Associated — now verify internet (blocks ~5s max, acceptable).
+        if (checkInternet()) {
+            saveCredentials(pending_ssid_, pending_pass_,
+                            pending_user_, pending_enterprise_);
+            conn_type_       = ConnType::WIFI;
+            pending_connect_ = false;
+            pending_result_  = "connected";
+            pending_ip_      = WiFi.localIP().toString();
+            Serial.printf("[NET] WiFi online (%s)\n", pending_ip_.c_str());
+            return;
+        }
+        // Internet check failed
+        Serial.println("[NET] Associated but no internet");
+        if (pending_enterprise_) esp_wifi_sta_enterprise_disable();
+        WiFi.disconnect(false);
+        pending_connect_ = false;
+        pending_result_  = "failed";
+        pending_error_   = "Connected to WiFi, but the network has no internet access.";
+        return;
+    }
+
+    if (millis() > pending_deadline_) {
+        Serial.printf("[NET] Association timed out (status=%d)\n", WiFi.status());
+        if (pending_enterprise_) esp_wifi_sta_enterprise_disable();
+        WiFi.disconnect(false);
+        pending_connect_ = false;
+        pending_result_  = "failed";
+        pending_error_   = pending_enterprise_
+            ? "Enterprise authentication failed. Check your username and password."
+            : "Could not connect. Check the password and try again.";
+    }
 }
 
 
@@ -414,28 +482,76 @@ void WiFiManager::serveConnect() {
         return;
     }
 
-    String error = ent ? connectEnterprise(ssid, user, pass)
-                       : connectWPA(ssid, pass);
+    // Set up enterprise EAP params if needed (these are non-blocking RPCs).
+    if (ent) {
+        esp_eap_client_set_identity((uint8_t*)user.c_str(), user.length());
+        esp_eap_client_set_username((uint8_t*)user.c_str(), user.length());
+        esp_eap_client_set_password((uint8_t*)pass.c_str(), pass.length());
+        esp_eap_client_set_disable_time_check(true);
 
-    if (!error.isEmpty()) {
-        WiFi.disconnect(false);
-        // Escape any quotes in the error message for JSON safety
-        error.replace("\"", "\\\"");
+        esp_err_t err = esp_wifi_sta_enterprise_enable();
+        if (err != ESP_OK) {
+            Serial.printf("[NET] Enterprise enable failed: 0x%x\n", err);
+            server_->send(200, "application/json",
+                          "{\"ok\":false,\"msg\":\"Enterprise WiFi not supported by "
+                          "current coprocessor firmware.\"}");
+            return;
+        }
+    }
+
+    // Kick off WiFi.begin() — non-blocking, returns immediately.
+    WiFi.disconnect(false);
+    delay(100);
+
+    Serial.printf("[NET] WiFi.begin('%s')%s...\n", ssid.c_str(),
+                  ent ? " [enterprise PEAP]" : "");
+
+    if (ent || pass.isEmpty())
+        WiFi.begin(ssid.c_str());
+    else
+        WiFi.begin(ssid.c_str(), pass.c_str());
+
+    // Store pending state — checkPendingConnection() monitors from the main loop.
+    pending_connect_    = true;
+    pending_ssid_       = ssid;
+    pending_pass_       = pass;
+    pending_user_       = user;
+    pending_enterprise_ = ent;
+    pending_deadline_   = millis() + (ent ? 20000 : 15000);
+    pending_result_     = "";
+    pending_ip_         = "";
+    pending_error_      = "";
+
+    // Respond immediately so the phone's captive portal webview doesn't time out.
+    server_->send(200, "application/json", "{\"status\":\"connecting\"}");
+}
+
+void WiFiManager::serveStatus() {
+    if (pending_result_ == "connected") {
         server_->send(200, "application/json",
-                      "{\"ok\":false,\"msg\":\"" + error + "\"}");
+                      "{\"status\":\"connected\",\"ip\":\"" + pending_ip_ + "\"}");
+        // Schedule portal teardown — give the phone time to render the success screen.
+        state_ = WiFiState::CONNECTED;
+        if (portal_stop_at_ == 0)
+            portal_stop_at_ = millis() + 5000;
         return;
     }
 
-    String ip = WiFi.localIP().toString();
-    saveCredentials(ssid, pass, user, ent);
-    server_->send(200, "application/json", "{\"ok\":true,\"ip\":\"" + ip + "\"}");
+    if (pending_result_ == "failed") {
+        String err = pending_error_;
+        err.replace("\"", "\\\"");
+        pending_result_ = "";
+        server_->send(200, "application/json",
+                      "{\"status\":\"failed\",\"msg\":\"" + err + "\"}");
+        return;
+    }
 
-    state_     = WiFiState::CONNECTED;
-    conn_type_ = ConnType::WIFI;
+    if (pending_connect_) {
+        server_->send(200, "application/json", "{\"status\":\"connecting\"}");
+        return;
+    }
 
-    // Let the response reach the client before tearing down the AP
-    delay(1000);
-    stopPortal();
+    server_->send(200, "application/json", "{\"status\":\"idle\"}");
 }
 
 void WiFiManager::serveRedirect() {

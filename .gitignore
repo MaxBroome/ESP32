@@ -5,6 +5,8 @@
 .venv
 .DS_Store
 docs/
+scripts/
+.c6_build/
 convert_image.py
 *.bin
 assets/fonts/*.h
