@@ -21,7 +21,8 @@ enum class WiFiState { IDLE, CONNECTING, CONNECTED, PORTAL_ACTIVE };
 
 class WiFiManager {
 public:
-    void begin();
+    // Optional callback for boot-screen status updates (e.g. "Attempting connection to \"MySSID\"").
+    void begin(void (*statusCallback)(const char*) = nullptr);
     void handlePortal();
 
     WiFiState getState()  const { return state_; }
@@ -29,6 +30,7 @@ public:
     bool      isConnected() const;
     String    getIP() const;
     bool      isPortalActive() const { return state_ == WiFiState::PORTAL_ACTIVE; }
+    const char* getPortalSSID() const;
 
 private:
     WiFiState state_     = WiFiState::IDLE;

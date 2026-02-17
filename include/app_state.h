@@ -5,6 +5,8 @@
 enum class AppScreen {
     BOOT,
     HOME,
+    CONNECT_NETWORK,
+    ONBOARDING,
     TAPPED
 };
 

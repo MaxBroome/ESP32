@@ -13,16 +13,21 @@
 #include "reset_button.h"
 #include "wifi_manager.h"
 #include "hosted_updater.h"
+#include "provision_code.h"
+#include "mqtt/provision.h"
 
 extern "C" {
     #include "esp32-hal-hosted.h"
 }
 
-Display      display;
-TouchHandler touch;
-AppState     appState;
-ResetButton  resetBtn;
-WiFiManager  wifiMgr;
+Display       display;
+TouchHandler  touch;
+AppState      appState;
+ResetButton   resetBtn;
+WiFiManager   wifiMgr;
+MqttProvision mqttProvision;
+
+static char last_onboarding_status[48] = {0};
 
 // Wait for the ESP-Hosted SDIO link to the C6 coprocessor to come up.
 // The C6 needs time to boot after the P4 resets it via the RESET pin.
@@ -56,23 +61,27 @@ void setup() {
     Serial.printf("Firmware version: %s\n", FIRMWARE_VERSION);
 
     display.begin();
-    display.showBootScreen();
+    display.showBootScreen("Starting...");
 
     // Register all NVS namespaces BEFORE the reset button check so that
     // factoryReset() actually knows what to wipe. Modules normally register
     // in their begin(), but that runs after the reset window.
     NvsManager::instance().registerNamespace("wifi");
+    NvsManager::instance().registerNamespace("device");
 
     // Factory reset: hold BOOT button at power-on for 5 seconds.
     // This must happen before wifiMgr.begin() because ETH.begin() takes
     // over GPIO35 (shared with the RMII bus) and makes the pin unreadable.
     resetBtn.begin(PIN_RESET_BTN, 5000);
+    display.showBootScreen("Checking reset...");
     resetBtn.waitForHold();
     resetBtn.disable();
 
+    display.showBootScreen("Initializing touch...");
     if (touch.begin()) Serial.println("Touch OK");
     else               Serial.println("Touch FAIL");
 
+    display.showBootScreen("Mounting storage...");
     // Mount LittleFS early so the C6 updater can access the firmware file.
     if (!LittleFS.begin(true)) {
         Serial.println("[FS] LittleFS mount failed, formatting");
@@ -80,27 +89,66 @@ void setup() {
         LittleFS.begin();
     }
 
+    display.showBootScreen("Connecting to WiFi...");
     // Initialize the ESP-Hosted SDIO link to the C6 coprocessor.
     // We go straight to AP_STA mode and NEVER change it again — the hosted
     // link does not survive WiFi.mode() transitions on the ESP32-P4.
     WiFi.mode(WIFI_AP_STA);
     waitForHostedLink();
 
+    display.showBootScreen("Checking for updates...");
     // If the hosted link is up, check if the C6 firmware needs updating.
     // This will reboot if an update is applied.
     HostedUpdater::updateIfNeeded();
 
-    wifiMgr.begin();
+    display.showBootScreen("Connecting to network...");
+    wifiMgr.begin([](const char* msg) { display.showBootScreen(msg); });
 
-    delay(2000);
-    display.showHomeScreen();
-    appState.setScreen(AppScreen::HOME);
-    Serial.println("Home screen ready");
+    // Once connected, show onboarding (code + MQTT provision)
+    if (wifiMgr.isConnected()) {
+        String code = ProvisionCode::getOrCreate();
+        display.showOnboardingScreen(code.c_str());
+        mqttProvision.begin(code.c_str());
+        last_onboarding_status[0] = '\0';
+        display.updateOnboardingStatus(mqttProvision.getStatusMessage());
+        strncpy(last_onboarding_status, mqttProvision.getStatusMessage(),
+                sizeof(last_onboarding_status) - 1);
+        last_onboarding_status[sizeof(last_onboarding_status) - 1] = '\0';
+        appState.setScreen(AppScreen::ONBOARDING);
+    } else {
+        // Portal active — show Connect to Network until user connects
+        display.showConnectToNetworkScreen(wifiMgr.getPortalSSID());
+        appState.setScreen(AppScreen::CONNECT_NETWORK);
+    }
+    Serial.println("Boot complete");
 }
 
 void loop() {
     if (wifiMgr.isPortalActive())
         wifiMgr.handlePortal();
+
+    // When transitioning from portal to connected, show onboarding and start MQTT
+    if (wifiMgr.isConnected() && (appState.getScreen() == AppScreen::HOME || appState.getScreen() == AppScreen::CONNECT_NETWORK)) {
+        String code = ProvisionCode::getOrCreate();
+        display.showOnboardingScreen(code.c_str());
+        mqttProvision.begin(code.c_str());
+        last_onboarding_status[0] = '\0';
+        display.updateOnboardingStatus(mqttProvision.getStatusMessage());
+        strncpy(last_onboarding_status, mqttProvision.getStatusMessage(),
+                sizeof(last_onboarding_status) - 1);
+        last_onboarding_status[sizeof(last_onboarding_status) - 1] = '\0';
+        appState.setScreen(AppScreen::ONBOARDING);
+    }
+
+    if (appState.getScreen() == AppScreen::ONBOARDING) {
+        mqttProvision.loop();
+        const char* status = mqttProvision.getStatusMessage();
+        if (status[0] && strcmp(status, last_onboarding_status) != 0) {
+            display.updateOnboardingStatus(status);
+            strncpy(last_onboarding_status, status, sizeof(last_onboarding_status) - 1);
+            last_onboarding_status[sizeof(last_onboarding_status) - 1] = '\0';
+        }
+    }
 
     if (appState.shouldRevertToHome()) {
         display.showHomeScreen();

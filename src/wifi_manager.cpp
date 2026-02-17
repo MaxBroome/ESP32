@@ -9,8 +9,8 @@
 // NVS
 static const char* NVS_NS = "wifi";
 
-// SoftAP
-static const char*     AP_SSID = "ScoreScrape-Setup";
+// SoftAP (single source of truth — display uses getPortalSSID())
+static const char AP_SSID[] = "ScoreScrape-Setup";
 static const IPAddress AP_IP(192, 168, 4, 1);
 static const IPAddress AP_GW(192, 168, 4, 1);
 static const IPAddress AP_MASK(255, 255, 255, 0);
@@ -33,7 +33,7 @@ volatile bool WiFiManager::eth_link_up_ = false;
 volatile bool WiFiManager::eth_got_ip_  = false;
 
 
-void WiFiManager::begin() {
+void WiFiManager::begin(void (*statusCallback)(const char*)) {
     NvsManager::instance().registerNamespace(NVS_NS);
 
     // LittleFS is already mounted by main.cpp (needed for C6 FW updater).
@@ -72,6 +72,11 @@ void WiFiManager::begin() {
     if (saved_ssid_.length() > 0) {
         Serial.printf("[NET] Trying saved creds: %s\n", saved_ssid_.c_str());
         state_ = WiFiState::CONNECTING;
+
+        if (statusCallback) {
+            String msg = "Attempting connection to \"" + saved_ssid_ + "\"";
+            statusCallback(msg.c_str());
+        }
 
         String err = saved_enterprise_
             ? connectEnterprise(saved_ssid_, saved_user_, saved_pass_)
@@ -116,6 +121,10 @@ void WiFiManager::handlePortal() {
             stopPortal();
         }
     }
+}
+
+const char* WiFiManager::getPortalSSID() const {
+    return AP_SSID;
 }
 
 bool WiFiManager::isConnected() const {

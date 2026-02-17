@@ -18,6 +18,9 @@
 #define COLOR_DARK_GRAY   0x4208
 #define COLOR_LIGHT_GRAY  0xC618
 
+// Brand color #6767e4 (RGB565)
+#define COLOR_BRAND       0x633C
+
 // Transparent (for overlays)
 #define COLOR_TRANSPARENT 0xFFFF
 
