@@ -29,6 +29,19 @@ MqttProvision mqttProvision;
 
 static char last_onboarding_status[48] = {0};
 
+// Start the MQTT provisioning flow and switch to the onboarding screen.
+static void startOnboarding() {
+    String code = ProvisionCode::getOrCreate();
+    display.showOnboardingScreen(code.c_str());
+    mqttProvision.begin(code.c_str());
+    last_onboarding_status[0] = '\0';
+    display.updateOnboardingStatus(mqttProvision.getStatusMessage());
+    strncpy(last_onboarding_status, mqttProvision.getStatusMessage(),
+            sizeof(last_onboarding_status) - 1);
+    last_onboarding_status[sizeof(last_onboarding_status) - 1] = '\0';
+    appState.setScreen(AppScreen::ONBOARDING);
+}
+
 // Wait for the ESP-Hosted SDIO link to the C6 coprocessor to come up.
 // The C6 needs time to boot after the P4 resets it via the RESET pin.
 static void waitForHostedLink(uint32_t timeout_ms = 8000) {
@@ -104,17 +117,14 @@ void setup() {
     display.showBootScreen("Connecting to network...");
     wifiMgr.begin([](const char* msg) { display.showBootScreen(msg); });
 
-    // Once connected, show onboarding (code + MQTT provision)
-    if (wifiMgr.isConnected()) {
-        String code = ProvisionCode::getOrCreate();
-        display.showOnboardingScreen(code.c_str());
-        mqttProvision.begin(code.c_str());
-        last_onboarding_status[0] = '\0';
-        display.updateOnboardingStatus(mqttProvision.getStatusMessage());
-        strncpy(last_onboarding_status, mqttProvision.getStatusMessage(),
-                sizeof(last_onboarding_status) - 1);
-        last_onboarding_status[sizeof(last_onboarding_status) - 1] = '\0';
-        appState.setScreen(AppScreen::ONBOARDING);
+    // Already provisioned from a previous boot — go straight to home.
+    if (wifiMgr.isConnected() && MqttProvision::hasBridgeId()) {
+        Serial.printf("[BOOT] Already provisioned (bridge_id=%s)\n",
+                      MqttProvision::getBridgeId().c_str());
+        display.showHomeScreen();
+        appState.setScreen(AppScreen::HOME);
+    } else if (wifiMgr.isConnected()) {
+        startOnboarding();
     } else {
         // Portal active — show Connect to Network until user connects
         display.showConnectToNetworkScreen(wifiMgr.getPortalSSID());
@@ -128,16 +138,8 @@ void loop() {
         wifiMgr.handlePortal();
 
     // When transitioning from portal to connected, show onboarding and start MQTT
-    if (wifiMgr.isConnected() && (appState.getScreen() == AppScreen::HOME || appState.getScreen() == AppScreen::CONNECT_NETWORK)) {
-        String code = ProvisionCode::getOrCreate();
-        display.showOnboardingScreen(code.c_str());
-        mqttProvision.begin(code.c_str());
-        last_onboarding_status[0] = '\0';
-        display.updateOnboardingStatus(mqttProvision.getStatusMessage());
-        strncpy(last_onboarding_status, mqttProvision.getStatusMessage(),
-                sizeof(last_onboarding_status) - 1);
-        last_onboarding_status[sizeof(last_onboarding_status) - 1] = '\0';
-        appState.setScreen(AppScreen::ONBOARDING);
+    if (wifiMgr.isConnected() && appState.getScreen() == AppScreen::CONNECT_NETWORK) {
+        startOnboarding();
     }
 
     if (appState.getScreen() == AppScreen::ONBOARDING) {
@@ -147,6 +149,11 @@ void loop() {
             display.updateOnboardingStatus(status);
             strncpy(last_onboarding_status, status, sizeof(last_onboarding_status) - 1);
             last_onboarding_status[sizeof(last_onboarding_status) - 1] = '\0';
+        }
+        if (mqttProvision.isProvisioned()) {
+            mqttProvision.stop();
+            display.showHomeScreen();
+            appState.setScreen(AppScreen::HOME);
         }
     }
 

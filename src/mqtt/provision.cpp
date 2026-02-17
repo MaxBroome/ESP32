@@ -1,6 +1,10 @@
 #include "mqtt/provision.h"
+#include "nvs_manager.h"
 
 static MqttProvision* s_provision = nullptr;
+
+static const char* NVS_NS     = "device";
+static const char* NVS_BRIDGE = "bridge_id";
 
 static String extractJson(const char* json, const char* key) {
     String n = String("\"") + key + "\"";
@@ -21,9 +25,23 @@ static String extractJson(const char* json, const char* key) {
     return s.substring(vi, end);
 }
 
+// -- Static NVS helpers -------------------------------------------------------
+
+bool MqttProvision::hasBridgeId() {
+    return getBridgeId().length() > 0;
+}
+
+String MqttProvision::getBridgeId() {
+    return NvsManager::instance().getString(NVS_NS, NVS_BRIDGE);
+}
+
+// -- Callbacks ----------------------------------------------------------------
+
 void MqttProvision::onMessage(const char* topic, const char* payload, unsigned int length) {
     if (s_provision) s_provision->handleMessage(topic, payload, length);
 }
+
+// -- Lifecycle ----------------------------------------------------------------
 
 void MqttProvision::begin(const char* code) {
     code_ = code;
@@ -39,29 +57,49 @@ void MqttProvision::begin(const char* code) {
     Serial.printf("[MQTT] Provision: %s -> %s\n", client_id_.c_str(), topic_.c_str());
 }
 
+void MqttProvision::stop() {
+    if (client_.isConnected()) {
+        client_.disconnect();
+        Serial.println("[MQTT] Disconnected");
+    }
+    s_provision = nullptr;
+    state_ = MqttProvisionState::IDLE;
+}
+
 void MqttProvision::loop() {
-    if (state_ == MqttProvisionState::IDLE || state_ == MqttProvisionState::REGISTERED ||
+    if (state_ == MqttProvisionState::IDLE ||
+        state_ == MqttProvisionState::PROVISIONED ||
         state_ == MqttProvisionState::ERROR) return;
+
     if (!client_.isConnected()) {
+        // Connection lost — need to re-subscribe after reconnecting.
+        subscribed_ = false;
         if (millis() - last_connect_attempt_ >= connect_interval_ms_) {
             last_connect_attempt_ = millis();
             doConnect();
         }
         return;
     }
+
     client_.loop();
-    if (state_ == MqttProvisionState::CONNECTING && client_.isConnected()) {
-        state_ = MqttProvisionState::SUBSCRIBING;
-        subscribed_ = false;
+
+    // After a (re)connect, always subscribe before doing anything else.
+    if (!subscribed_) {
+        doSubscribe();
+        return;
     }
-    if (state_ == MqttProvisionState::SUBSCRIBING && !subscribed_) doSubscribe();
-    if (state_ == MqttProvisionState::SUBSCRIBING && subscribed_) {
-        state_ = MqttProvisionState::PUBLISHING;
-        published_ = false;
+
+    // First time through after subscribing: publish the register message.
+    if (!published_) {
+        doPublish();
+        return;
     }
-    if (state_ == MqttProvisionState::PUBLISHING && !published_) doPublish();
-    if (state_ == MqttProvisionState::PUBLISHING && published_) state_ = MqttProvisionState::WAITING_ACK;
+
+    // Otherwise we're in WAITING_ACK or REGISTERED — just keep pumping
+    // client_.loop() so the provision message can arrive.
 }
+
+// -- Internal helpers ---------------------------------------------------------
 
 void MqttProvision::doConnect() {
     strncpy(status_msg_, "Connecting to MQTT broker", sizeof(status_msg_) - 1);
@@ -100,9 +138,35 @@ void MqttProvision::doPublish() {
 }
 
 void MqttProvision::handleMessage(const char* topic, const char* payload, unsigned int length) {
+    (void)topic;
     (void)length;
+    Serial.printf("[MQTT] Rx: %s\n", payload);
+
     String type = extractJson(payload, "type");
+
+    // Ignore our own register echo.
     if (type == "register") return;
+
+    // Provision message — save bridge_id and we're done.
+    if (type == "provision") {
+        String bridgeId = extractJson(payload, "bridge_id");
+        if (bridgeId.length() > 0) {
+            NvsManager::instance().registerNamespace(NVS_NS);
+            if (NvsManager::instance().putString(NVS_NS, NVS_BRIDGE, bridgeId)) {
+                state_ = MqttProvisionState::PROVISIONED;
+                strncpy(status_msg_, "Provisioned", sizeof(status_msg_) - 1);
+                status_msg_[sizeof(status_msg_) - 1] = '\0';
+                Serial.printf("[MQTT] Provisioned bridge_id=%s\n", bridgeId.c_str());
+            } else {
+                Serial.println("[MQTT] Failed to save bridge_id to NVS");
+            }
+        } else {
+            Serial.println("[MQTT] Provision message missing bridge_id");
+        }
+        return;
+    }
+
+    // Ack from server after register.
     if (type == "ack" && extractJson(payload, "status") == "registered") {
         state_ = MqttProvisionState::REGISTERED;
         strncpy(status_msg_, "Waiting for adoption", sizeof(status_msg_) - 1);

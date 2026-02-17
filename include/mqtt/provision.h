@@ -9,6 +9,7 @@ enum class MqttProvisionState {
     PUBLISHING,
     WAITING_ACK,
     REGISTERED,
+    PROVISIONED,
     ERROR
 };
 
@@ -16,10 +17,17 @@ class MqttProvision {
 public:
     void begin(const char* code);
     void loop();
+    void stop();
+
     MqttProvisionState getState() const { return state_; }
     const char* getError() const { return error_msg_; }
     const char* getStatusMessage() const { return status_msg_; }
     bool isRegistered() const { return state_ == MqttProvisionState::REGISTERED; }
+    bool isProvisioned() const { return state_ == MqttProvisionState::PROVISIONED; }
+
+    // Check NVS for an existing bridge_id (persists across reboots).
+    static bool hasBridgeId();
+    static String getBridgeId();
 
 private:
     static void onMessage(const char* topic, const char* payload, unsigned int length);
