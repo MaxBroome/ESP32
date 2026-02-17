@@ -6,7 +6,6 @@ void ResetButton::begin(uint8_t pin, uint32_t hold_ms) {
     hold_ms_ = hold_ms;
     enabled_ = true;
     pinMode(pin_, INPUT_PULLUP);
-    Serial.printf("[RST] GPIO%d, hold %lums to factory reset\n", pin_, hold_ms_);
 }
 
 void ResetButton::disable() {
@@ -20,32 +19,31 @@ bool ResetButton::waitForHold() {
     // Quick check — if button isn't pressed right now, don't block at all
     if (digitalRead(pin_) == HIGH) return false;
 
-    Serial.println("[RST] Button held, waiting for threshold...");
+    Serial.println("[reset] button held, counting down...");
     uint32_t start = millis();
 
     while (digitalRead(pin_) == LOW) {
         uint32_t elapsed = millis() - start;
 
         if (elapsed >= hold_ms_) {
-            Serial.println("[RST] Factory reset triggered");
+            Serial.println("[reset] factory reset");
             NvsManager::instance().factoryReset();
             delay(200);
             ESP.restart();
-            return true;  // unreachable, but keeps the compiler happy
+            return true;
         }
 
-        // Log progress each second
         static uint32_t last_sec = 0;
         uint32_t sec = elapsed / 1000;
         if (sec > last_sec) {
             last_sec = sec;
-            Serial.printf("[RST] %lu/%lums\n", elapsed, hold_ms_);
+            Serial.printf("[reset] %lus / %lus\n", sec, hold_ms_ / 1000);
         }
 
         delay(10);
     }
 
-    Serial.println("[RST] Released early, continuing boot");
+    Serial.println("[reset] released, continuing boot");
     return false;
 }
 
@@ -66,7 +64,7 @@ void ResetButton::check() {
 
     uint32_t held = millis() - press_start_;
     if (held >= hold_ms_) {
-        Serial.println("[RST] Factory reset triggered");
+        Serial.println("[reset] factory reset");
         NvsManager::instance().factoryReset();
         delay(200);
         ESP.restart();

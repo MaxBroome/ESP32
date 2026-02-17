@@ -17,7 +17,6 @@ String ProvisionCode::getOrCreate() {
         return code;
     }
 
-    // Generate new code
     code.reserve(CODE_LEN + 1);
     code = "";
     uint32_t r;
@@ -27,6 +26,6 @@ String ProvisionCode::getOrCreate() {
     }
 
     NvsManager::instance().putString(NVS_NS, NVS_KEY, code);
-    Serial.printf("[PROV] Generated new claim code: %s\n", code.c_str());
+    Serial.printf("[init] claim code: %s\n", code.c_str());
     return code;
 }

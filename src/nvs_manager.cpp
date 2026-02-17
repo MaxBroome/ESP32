@@ -101,10 +101,9 @@ bool NvsManager::clearNamespace(const char* ns) {
 }
 
 void NvsManager::factoryReset() {
-    Serial.println("[NVS] Factory reset — wiping all namespaces");
+    Serial.println("[nvs]  factory reset");
     for (uint8_t i = 0; i < ns_count; i++) {
-        Serial.printf("[NVS]   Clearing: %s\n", namespaces[i]);
+        Serial.printf("[nvs]  clear: %s\n", namespaces[i]);
         clearNamespace(namespaces[i]);
     }
-    Serial.println("[NVS] Factory reset complete");
 }

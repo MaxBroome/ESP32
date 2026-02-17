@@ -42,7 +42,7 @@ void WiFiManager::begin(void (*statusCallback)(const char*)) {
         portal_html_ = f.readString();
         f.close();
     } else {
-        Serial.println("[NET] /index.html missing (run: pio run -t uploadfs)");
+        Serial.println("[net]  portal html missing (run: pio run -t uploadfs)");
         portal_html_ = "<html><body><h2>Filesystem not flashed</h2>"
                         "<p>Run <code>pio run -t uploadfs</code></p></body></html>";
     }
@@ -54,7 +54,7 @@ void WiFiManager::begin(void (*statusCallback)(const char*)) {
     delay(2000);
 
     if (eth_got_ip_ && checkEthernetInternet()) {
-        Serial.printf("[NET] Ethernet online (%s)\n", ETH.localIP().toString().c_str());
+        Serial.printf("[net]  ethernet: %s\n", ETH.localIP().toString().c_str());
         state_     = WiFiState::CONNECTED;
         conn_type_ = ConnType::ETHERNET;
         hideAP();
@@ -70,11 +70,10 @@ void WiFiManager::begin(void (*statusCallback)(const char*)) {
     // -----------------------------------------------------------------------
 
     if (saved_ssid_.length() > 0) {
-        Serial.printf("[NET] Trying saved creds: %s\n", saved_ssid_.c_str());
         state_ = WiFiState::CONNECTING;
 
         if (statusCallback) {
-            String msg = "Attempting connection to \"" + saved_ssid_ + "\"";
+            String msg = "Connecting to \"" + saved_ssid_ + "\"...";
             statusCallback(msg.c_str());
         }
 
@@ -86,10 +85,11 @@ void WiFiManager::begin(void (*statusCallback)(const char*)) {
             state_     = WiFiState::CONNECTED;
             conn_type_ = ConnType::WIFI;
             hideAP();
-            Serial.printf("[NET] WiFi online (%s)\n", WiFi.localIP().toString().c_str());
+            Serial.printf("[net]  wifi: %s %s\n", saved_ssid_.c_str(),
+                          WiFi.localIP().toString().c_str());
             return;
         }
-        Serial.println("[NET] Saved creds failed");
+        Serial.printf("[net]  wifi: %s failed\n", saved_ssid_.c_str());
     }
 
     startPortal();
@@ -115,7 +115,7 @@ void WiFiManager::handlePortal() {
     if (eth_got_ip_ && now >= next_eth_poll) {
         next_eth_poll = now + 5000;
         if (checkEthernetInternet()) {
-            Serial.println("[NET] Ethernet detected, closing portal");
+            Serial.println("[net]  ethernet online, closing portal");
             state_     = WiFiState::CONNECTED;
             conn_type_ = ConnType::ETHERNET;
             stopPortal();
@@ -153,11 +153,11 @@ void WiFiManager::ethEventHandler(arduino_event_id_t event) {
         break;
     case ARDUINO_EVENT_ETH_CONNECTED:
         eth_link_up_ = true;
-        Serial.println("[ETH] Link up");
+        Serial.println("[net]  eth: link up");
         break;
     case ARDUINO_EVENT_ETH_GOT_IP:
         eth_got_ip_ = true;
-        Serial.printf("[ETH] %s\n", ETH.localIP().toString().c_str());
+        Serial.printf("[net]  eth: %s\n", ETH.localIP().toString().c_str());
         break;
     case ARDUINO_EVENT_ETH_LOST_IP:
         eth_got_ip_ = false;
@@ -165,7 +165,7 @@ void WiFiManager::ethEventHandler(arduino_event_id_t event) {
     case ARDUINO_EVENT_ETH_DISCONNECTED:
         eth_link_up_ = false;
         eth_got_ip_  = false;
-        Serial.println("[ETH] Link down");
+        Serial.println("[net]  eth: link down");
         break;
     case ARDUINO_EVENT_ETH_STOP:
         eth_link_up_ = false;
@@ -238,15 +238,13 @@ String WiFiManager::connectWPA(const String& ssid, const String& pass,
     WiFi.disconnect(false);
     delay(100);
 
-    Serial.printf("[NET] WiFi.begin('%s')...\n", ssid.c_str());
     if (pass.length() > 0)
         WiFi.begin(ssid.c_str(), pass.c_str());
     else
         WiFi.begin(ssid.c_str());
 
     if (!waitForAssociation(timeout_ms)) {
-        Serial.printf("[NET] WPA association to '%s' timed out (status=%d)\n",
-                      ssid.c_str(), WiFi.status());
+        Serial.printf("[net]  wifi: %s timeout (status=%d)\n", ssid.c_str(), WiFi.status());
         WiFi.disconnect(false);
         if (pass.length() > 0)
             return "Could not connect. Check that the password is correct.";
@@ -254,7 +252,7 @@ String WiFiManager::connectWPA(const String& ssid, const String& pass,
     }
 
     if (!checkInternet()) {
-        Serial.println("[NET] WPA connected but no internet (captive portal or restricted network)");
+        Serial.printf("[net]  wifi: %s no internet\n", ssid.c_str());
         WiFi.disconnect(false);
         return "Connected to WiFi, but the network has no internet access. "
                "It may require a captive portal login that this device cannot complete.";
@@ -282,25 +280,23 @@ String WiFiManager::connectEnterprise(const String& ssid, const String& user,
 
     esp_err_t err = esp_wifi_sta_enterprise_enable();
     if (err != ESP_OK) {
-        Serial.printf("[NET] Enterprise enable failed: 0x%x\n", err);
+        Serial.printf("[net]  wifi: enterprise enable failed (0x%x)\n", err);
         WiFi.disconnect(false);
         return "Enterprise (802.1X) WiFi is not supported by the current "
                "coprocessor firmware. A firmware update may be required.";
     }
 
-    Serial.printf("[NET] WiFi.begin('%s') [enterprise PEAP]...\n", ssid.c_str());
     WiFi.begin(ssid.c_str());
 
     if (!waitForAssociation(timeout_ms)) {
-        Serial.printf("[NET] Enterprise association to '%s' timed out (status=%d)\n",
-                      ssid.c_str(), WiFi.status());
+        Serial.printf("[net]  wifi: %s timeout (status=%d)\n", ssid.c_str(), WiFi.status());
         esp_wifi_sta_enterprise_disable();
         WiFi.disconnect(false);
         return "Enterprise authentication failed. Check your username and password.";
     }
 
     if (!checkInternet()) {
-        Serial.println("[NET] Enterprise connected but no internet (captive portal or restricted network)");
+        Serial.printf("[net]  wifi: %s no internet\n", ssid.c_str());
         esp_wifi_sta_enterprise_disable();
         WiFi.disconnect(false);
         return "Connected to WiFi, but the network has no internet access.";
@@ -321,16 +317,15 @@ bool WiFiManager::checkInternet() {
         response.trim();
 
         if (response == CAPTIVE_CHECK_RESPONSE) {
-            Serial.println("[NET] Internet connectivity verified via ScoreScrape API");
             return true;
         } else {
-            Serial.printf("[NET] Unexpected response from ping endpoint: '%s'\n", response.c_str());
+            Serial.printf("[net]  ping: unexpected response '%s'\n", response.c_str());
             return false;
         }
     }
 
     http.end();
-    Serial.printf("[NET] Ping endpoint returned code %d (expected 200)\n", code);
+    Serial.printf("[net]  ping: http %d\n", code);
     return false;
 }
 
@@ -338,8 +333,6 @@ bool WiFiManager::checkInternet() {
 // -- Captive portal ---------------------------------------------------------
 
 void WiFiManager::startPortal() {
-    Serial.println("[NET] Starting captive portal");
-
     // We're already in WIFI_AP_STA mode — just bring up the SoftAP.
     // No WiFi.mode() calls here to avoid killing the hosted link.
     WiFi.softAPConfig(AP_IP, AP_GW, AP_MASK);
@@ -361,7 +354,7 @@ void WiFiManager::startPortal() {
     server_->begin();
 
     state_ = WiFiState::PORTAL_ACTIVE;
-    Serial.printf("[NET] AP \"%s\" on %s\n", AP_SSID,
+    Serial.printf("[net]  portal: %s @ %s\n", AP_SSID,
                   WiFi.softAPIP().toString().c_str());
 }
 
@@ -369,7 +362,7 @@ void WiFiManager::stopPortal() {
     if (server_) { server_->stop(); delete server_; server_ = nullptr; }
     if (dns_)    { dns_->stop();    delete dns_;    dns_    = nullptr; }
     hideAP();
-    Serial.println("[NET] Portal stopped");
+    Serial.println("[net]  portal: stopped");
 }
 
 void WiFiManager::hideAP() {
@@ -406,11 +399,10 @@ void WiFiManager::checkPendingConnection() {
             pending_connect_ = false;
             pending_result_  = "connected";
             pending_ip_      = WiFi.localIP().toString();
-            Serial.printf("[NET] WiFi online (%s)\n", pending_ip_.c_str());
+            Serial.printf("[net]  wifi: %s %s\n", pending_ssid_.c_str(), pending_ip_.c_str());
             return;
         }
-        // Internet check failed
-        Serial.println("[NET] Associated but no internet");
+        Serial.printf("[net]  wifi: %s no internet\n", pending_ssid_.c_str());
         if (pending_enterprise_) esp_wifi_sta_enterprise_disable();
         WiFi.disconnect(false);
         pending_connect_ = false;
@@ -420,7 +412,8 @@ void WiFiManager::checkPendingConnection() {
     }
 
     if (millis() > pending_deadline_) {
-        Serial.printf("[NET] Association timed out (status=%d)\n", WiFi.status());
+        Serial.printf("[net]  wifi: %s timeout (status=%d)\n",
+                      pending_ssid_.c_str(), WiFi.status());
         if (pending_enterprise_) esp_wifi_sta_enterprise_disable();
         WiFi.disconnect(false);
         pending_connect_ = false;
@@ -500,7 +493,7 @@ void WiFiManager::serveConnect() {
 
         esp_err_t err = esp_wifi_sta_enterprise_enable();
         if (err != ESP_OK) {
-            Serial.printf("[NET] Enterprise enable failed: 0x%x\n", err);
+            Serial.printf("[net]  wifi: enterprise enable failed (0x%x)\n", err);
             server_->send(200, "application/json",
                           "{\"ok\":false,\"msg\":\"Enterprise WiFi not supported by "
                           "current coprocessor firmware.\"}");
@@ -508,12 +501,11 @@ void WiFiManager::serveConnect() {
         }
     }
 
-    // Kick off WiFi.begin() — non-blocking, returns immediately.
     WiFi.disconnect(false);
     delay(100);
 
-    Serial.printf("[NET] WiFi.begin('%s')%s...\n", ssid.c_str(),
-                  ent ? " [enterprise PEAP]" : "");
+    Serial.printf("[net]  wifi: connecting %s%s\n", ssid.c_str(),
+                  ent ? " (enterprise)" : "");
 
     if (ent || pass.isEmpty())
         WiFi.begin(ssid.c_str());
@@ -531,7 +523,6 @@ void WiFiManager::serveConnect() {
     pending_ip_         = "";
     pending_error_      = "";
 
-    // Respond immediately so the phone's captive portal webview doesn't time out.
     server_->send(200, "application/json", "{\"status\":\"connecting\"}");
 }
 
@@ -539,7 +530,6 @@ void WiFiManager::serveStatus() {
     if (pending_result_ == "connected") {
         server_->send(200, "application/json",
                       "{\"status\":\"connected\",\"ip\":\"" + pending_ip_ + "\"}");
-        // Schedule portal teardown — give the phone time to render the success screen.
         state_ = WiFiState::CONNECTED;
         if (portal_stop_at_ == 0)
             portal_stop_at_ = millis() + 5000;

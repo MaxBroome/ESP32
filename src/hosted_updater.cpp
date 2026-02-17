@@ -10,22 +10,21 @@ extern "C" {
 }
 
 static const char* FW_PATH = "/c6_fw.bin";
-static const size_t CHUNK_SIZE = 1400;  // recommended by esp_hosted OTA docs
+static const size_t CHUNK_SIZE = 1400;
 static const char* NVS_NS = "c6ota";
 static const char* NVS_KEY = "fwsize";
 
 bool HostedUpdater::updateIfNeeded() {
     if (!hostedIsInitialized()) {
-        Serial.println("[C6] ESP-Hosted not initialized, skipping FW check");
+        Serial.println("[init] c6: skipped (no radio)");
         return false;
     }
 
     if (!LittleFS.exists(FW_PATH)) {
-        Serial.println("[C6] No firmware file on LittleFS, skipping");
+        Serial.println("[init] c6: no firmware on fs");
         return false;
     }
 
-    // Check if the version changed (host driver vs slave firmware).
     bool versionMismatch = hostedHasUpdate();
 
     // Also check if the firmware binary on LittleFS changed since last flash.
@@ -36,59 +35,53 @@ bool HostedUpdater::updateIfNeeded() {
     if (fw) fw.close();
 
     Preferences prefs;
-    prefs.begin(NVS_NS, true);  // read-only
+    prefs.begin(NVS_NS, true);
     size_t lastFlashedSize = prefs.getUInt(NVS_KEY, 0);
     prefs.end();
 
     bool binaryChanged = (fileSize > 0 && fileSize != lastFlashedSize);
 
     if (!versionMismatch && !binaryChanged) {
-        Serial.println("[C6] Coprocessor firmware is up to date");
+        Serial.println("[init] c6: firmware current");
         return false;
     }
 
-    if (binaryChanged && !versionMismatch) {
-        Serial.printf("[C6] Firmware binary changed (%u -> %u bytes), forcing update\n",
-                      lastFlashedSize, fileSize);
-    }
-
-    // Version or binary mismatch — update needed
     uint32_t hMaj, hMin, hPat, sMaj, sMin, sPat;
     hostedGetHostVersion(&hMaj, &hMin, &hPat);
     hostedGetSlaveVersion(&sMaj, &sMin, &sPat);
-    Serial.printf("[C6] Host expects %lu.%lu.%lu, slave has %lu.%lu.%lu\n",
-                  hMaj, hMin, hPat, sMaj, sMin, sPat);
-    Serial.println("[C6] Updating coprocessor firmware...");
+    Serial.printf("[ota]  c6: host=%lu.%lu.%lu slave=%lu.%lu.%lu%s\n",
+                  hMaj, hMin, hPat, sMaj, sMin, sPat,
+                  binaryChanged ? " (binary changed)" : "");
+    Serial.println("[ota]  c6: updating...");
 
     if (flashFromFile(FW_PATH)) {
-        // Record the file size so we don't re-flash the same binary next boot.
         Preferences p;
         p.begin(NVS_NS, false);
         p.putUInt(NVS_KEY, fileSize);
         p.end();
 
-        Serial.println("[C6] Update complete, rebooting...");
+        Serial.println("[ota]  c6: complete, rebooting");
         delay(500);
         ESP.restart();
-        return true;  // unreachable, but for clarity
+        return true;
     }
 
-    Serial.println("[C6] Update FAILED");
+    Serial.println("[ota]  c6: FAILED");
     return false;
 }
 
 bool HostedUpdater::flashFromFile(const char* path) {
     File f = LittleFS.open(path, "r");
     if (!f) {
-        Serial.println("[C6] Failed to open firmware file");
+        Serial.println("[ota]  c6: cannot open file");
         return false;
     }
 
     size_t total = f.size();
-    Serial.printf("[C6] Firmware size: %u bytes\n", total);
+    Serial.printf("[ota]  c6: %u bytes\n", total);
 
     if (!hostedBeginUpdate()) {
-        Serial.println("[C6] OTA begin failed");
+        Serial.println("[ota]  c6: begin failed");
         f.close();
         return false;
     }
@@ -101,13 +94,13 @@ bool HostedUpdater::flashFromFile(const char* path) {
         size_t toRead = min(CHUNK_SIZE, total - written);
         size_t got = f.read(buf, toRead);
         if (got == 0) {
-            Serial.println("[C6] Read error");
+            Serial.println("[ota]  c6: read error");
             f.close();
             return false;
         }
 
         if (!hostedWriteUpdate(buf, got)) {
-            Serial.printf("[C6] Write failed at offset %u\n", written);
+            Serial.printf("[ota]  c6: write failed @ %u\n", written);
             f.close();
             return false;
         }
@@ -115,7 +108,7 @@ bool HostedUpdater::flashFromFile(const char* path) {
         written += got;
         int pct = (written * 100) / total;
         if (pct / 10 != lastPct / 10) {
-            Serial.printf("[C6] %d%%\n", pct);
+            Serial.printf("[ota]  c6: %d%%\n", pct);
             lastPct = pct;
         }
     }
@@ -123,12 +116,11 @@ bool HostedUpdater::flashFromFile(const char* path) {
     f.close();
 
     if (!hostedEndUpdate()) {
-        Serial.println("[C6] OTA end/verify failed");
+        Serial.println("[ota]  c6: verify failed");
         return false;
     }
 
     if (!hostedActivateUpdate()) {
-        Serial.println("[C6] OTA activate failed (may be OK on older FW)");
         // Not fatal — older firmwares don't support activate
     }
 
